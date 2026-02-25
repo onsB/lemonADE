@@ -7,8 +7,13 @@ requires-python = ">=3.13"
 dependencies = [
     "dotenv>=0.9.9",
     "ipykernel>=7.2.0",
+    "langchain>=0.1.0",
+    "langchain-legacy>=0.0.0",
     "langchain-openai>=1.1.10",
     "langchain-tools>=0.1.34",
+    "matplotlib>=3.10.8",
+    "paddleocr>=3.4.0",
+    "paddlepaddle>=3.3.0",
     "pytesseract>=0.3.13",
     "tesseract>=0.1.3",
 ]
