@@ -1,0 +1,22 @@
+# secrets
+.env
+
+# personal financial data — never commit statements or parsed output
+app/data/statements/*
+app/data/parsed/*
+!app/data/**/.gitkeep
+*.pdf
+app/files/page_*.png
+files/
+
+# python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# IDE
+.idea/workspace.xml
+
+
+# experiments
+*.ipynb
