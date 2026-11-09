@@ -2,6 +2,7 @@ import io
 from typing import Literal
 from fastapi import FastAPI, UploadFile, HTTPException
 from fastapi.responses import Response
+from pdfplumber.utils.exceptions import PdfminerException
 from pydantic import BaseModel
 
 import datetime as dt
@@ -44,8 +45,8 @@ async def parse_uploaded_statement(
 
     try:
         df, opening, closing, spending = parse_statement(io.BytesIO(content))
-    except StatementParseError as e:
-        raise HTTPException(422, str(e))
+    except (StatementParseError, PdfminerException) as e:
+        raise HTTPException(422, f"Could not read this statement: {e}")
 
     summary = Summary(
         transaction_count=len(df),
@@ -63,7 +64,7 @@ async def parse_uploaded_statement(
 
     df = df.assign(date=df["date"].dt.date, posted=df["posted"].dt.date)
     return ParsedStatement(filename=file.filename or "statement.pdf", 
-                        summary=Summary(**summary),
+                        summary=summary,
                         transactions=df.to_dict(orient="records"))
 
 def main():
