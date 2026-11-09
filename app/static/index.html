@@ -45,17 +45,21 @@
   th { color: var(--muted); font-size: 13px; font-weight: 500; }
   .amount { text-align: right; font-variant-numeric: tabular-nums; }
   td.description { white-space: normal; min-width: 200px; }
+  .statements { margin-bottom: 20px; }
+  .statements td.error { color: var(--bad); white-space: normal; }
+  .source { max-width: 170px; overflow: hidden; text-overflow: ellipsis; color: var(--muted); font-size: 14px; }
+  table.single .source { display: none; }
   [hidden] { display: none; }
 </style>
 </head>
 <body>
 <main>
   <h1>🍋 LemonADE</h1>
-  <p class="tagline">Upload a statement to see your expenses.</p>
+  <p class="tagline">Upload one or more statements to see your expenses.</p>
 
   <form id="upload">
-    <input id="file" type="file" accept="application/pdf,.pdf" required aria-label="Statement PDF">
-    <button id="submit" type="submit">Read statement</button>
+    <input id="file" type="file" accept="application/pdf,.pdf" multiple required aria-label="Statement PDFs">
+    <button id="submit" type="submit">Read statements</button>
   </form>
   <p id="status" role="status"></p>
 
@@ -63,18 +67,25 @@
     <div class="tiles">
       <div class="tile"><span>Spending</span><strong id="spending"></strong></div>
       <div class="tile"><span>Transactions</span><strong id="count"></strong></div>
-      <div class="tile"><span>Previous balance</span><strong id="opening"></strong></div>
-      <div class="tile"><span>New balance</span><strong id="closing"></strong></div>
+      <div class="tile"><span>Statements</span><strong id="statement-count"></strong></div>
     </div>
     <p id="check"></p>
+    <div class="table-wrap statements">
+      <table>
+        <thead>
+          <tr><th>Statement</th><th class="amount">Spending</th><th class="amount">Transactions</th><th class="amount">Previous balance</th><th class="amount">New balance</th><th>Adds up</th></tr>
+        </thead>
+        <tbody id="statement-rows"></tbody>
+      </table>
+    </div>
     <div class="table-tools">
       <label><input id="expenses-only" type="checkbox" checked> Expenses only</label>
       <span id="showing"></span>
     </div>
     <div class="table-wrap">
-      <table>
+      <table id="transactions">
         <thead>
-          <tr><th>Date</th><th>Description</th><th>Type</th><th class="amount">Amount</th></tr>
+          <tr><th>Date</th><th>Description</th><th class="source">Statement</th><th>Type</th><th class="amount">Amount</th></tr>
         </thead>
         <tbody id="rows"></tbody>
       </table>
@@ -85,6 +96,7 @@
 <script>
   const $ = (id) => document.getElementById(id);
   const EXPENSE_KINDS = ["purchase", "fee"];  // the same kinds the Spending total counts
+  let statements = [];  // one { filename, summary, transactions } or { filename, error } per upload
   let allTransactions = [];
   const money = (n) => n == null
     ? "–"
@@ -97,18 +109,43 @@
     return td;
   }
 
-  function showResults({ summary, transactions }) {
-    $("spending").textContent = money(summary.total_spending);
-    $("count").textContent = summary.transaction_count;
-    $("opening").textContent = money(summary.opening_balance);
-    $("closing").textContent = money(summary.closing_balance);
+  function statementRow(s) {
+    const tr = document.createElement("tr");
+    if (s.error) {
+      const reason = cell(s.error, "error");
+      reason.colSpan = 5;
+      tr.append(cell(s.filename, "description"), reason);
+      return tr;
+    }
+    tr.append(
+      cell(s.filename, "description"),
+      cell(money(s.summary.total_spending), "amount"),
+      cell(s.summary.transaction_count, "amount"),
+      cell(money(s.summary.opening_balance), "amount"),
+      cell(money(s.summary.closing_balance), "amount"),
+      cell(s.summary.reconciled ? "✓ Yes" : "⚠ No"),
+    );
+    return tr;
+  }
 
-    $("check").textContent = summary.reconciled
-      ? "✓ These transactions add up to the statement's balances."
-      : "⚠ These transactions don't add up to the statement's balances. Check them before relying on this.";
-    $("check").className = summary.reconciled ? "good" : "bad";
+  function showResults() {
+    const parsed = statements.filter((s) => !s.error);
+    const unbalanced = parsed.filter((s) => !s.summary.reconciled).length;
 
-    allTransactions = transactions;
+    $("spending").textContent = money(parsed.reduce((sum, s) => sum + s.summary.total_spending, 0));
+    $("count").textContent = parsed.reduce((sum, s) => sum + s.summary.transaction_count, 0);
+    $("statement-count").textContent = parsed.length;
+
+    $("check").textContent = unbalanced
+      ? `⚠ ${unbalanced} of ${parsed.length} statements don't add up to their balances. Check them before relying on this.`
+      : parsed.length ? "✓ These transactions add up to the statements' balances." : "";
+    $("check").className = unbalanced ? "bad" : "good";
+    $("statement-rows").replaceChildren(...statements.map(statementRow));
+
+    allTransactions = parsed
+      .flatMap((s) => s.transactions.map((t) => ({ ...t, source: s.filename })))
+      .sort((a, b) => a.date.localeCompare(b.date));
+    $("transactions").classList.toggle("single", parsed.length < 2);
     renderRows();
     $("results").hidden = false;
   }
@@ -120,7 +157,13 @@
 
     $("rows").replaceChildren(...shown.map((t) => {
       const tr = document.createElement("tr");
-      tr.append(cell(t.date), cell(t.description, "description"), cell(t.kind), cell(money(t.amount), "amount"));
+      tr.append(
+        cell(t.date),
+        cell(t.description, "description"),
+        cell(t.source, "source"),
+        cell(t.kind),
+        cell(money(t.amount), "amount"),
+      );
       return tr;
     }));
     $("showing").textContent = `Showing ${shown.length} of ${allTransactions.length}`;
@@ -135,24 +178,35 @@
 
   $("upload").addEventListener("submit", async (event) => {
     event.preventDefault();
-    const body = new FormData();
-    body.append("file", $("file").files[0]);
+    const files = [...$("file").files];
 
     $("submit").disabled = true;
     $("results").hidden = true;
-    setStatus("Reading your statement. This can take up to a minute…");
+    statements = [];
+    for (const [i, file] of files.entries()) {
+      setStatus(`Reading statement ${i + 1} of ${files.length}: ${file.name}. Each one can take up to a minute…`);
+      statements.push(await readStatement(file));
+      showResults();  // show each statement as soon as it's ready
+    }
+
+    const failed = statements.filter((s) => s.error).length;
+    setStatus(failed ? `Couldn't read ${failed} of ${files.length} statements.` : "", failed > 0);
+    $("submit").disabled = false;
+  });
+
+  // One at a time: the local model handles one request at a time anyway.
+  async function readStatement(file) {
+    const body = new FormData();
+    body.append("file", file);
     try {
       const response = await fetch("/statements/parse", { method: "POST", body });
-      const data = await response.json();
-      if (!response.ok) throw new Error(data.detail ?? "Something went wrong.");
-      setStatus("");
-      showResults(data);
-    } catch (error) {
-      setStatus(error.message, true);
-    } finally {
-      $("submit").disabled = false;
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) return { filename: file.name, error: data.detail ?? "Something went wrong." };
+      return { ...data, filename: file.name };
+    } catch {
+      return { filename: file.name, error: "Couldn't reach the server." };
     }
-  });
+  }
 </script>
 </body>
 </html>
