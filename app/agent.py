@@ -10,14 +10,14 @@ uour final output would be a short summary of the statement, including the numbe
 """
 
 
-def run_agent(pdf_path: str) -> dict:
+def run_agent(source) -> dict:
     found = {}
 
     @tool
     def run_td_parser() -> dict:
         """Parse a credit card statement and report whether it reconciled."""
         try:
-            df, opening, closing, spending = parse_statement(pdf_path)
+            df, opening, closing, spending = parse_statement(source)
         except StatementParseError as e:
             return {"error": str(e)}
 
