@@ -68,7 +68,11 @@ def parse_statement(source:pathlib.Path):
     df = df.rename(columns={"desc": "description"})[["date", "posted", "description", "amount", "kind", "page"]]
 
     # reconcile: previous balance + transactions must equal the new balance
-    opening = to_amount(re.search(rf"SOLDE DU RELEVÉ PRÉCÉDENT ({AMOUNT})", full_text).group(1))
-    closing = to_amount(re.search(rf"NOUVEAU SOLDE ({AMOUNT})", full_text).group(1))
+    opening_match = re.search(rf"SOLDE DU RELEVÉ PRÉCÉDENT ({AMOUNT})", full_text)
+    closing_match = re.search(rf"NOUVEAU SOLDE ({AMOUNT})", full_text)
+    if not opening_match or not closing_match:
+        raise StatementParseError("Opening or closing balance not found in this PDF")
+    opening = to_amount(opening_match.group(1))
+    closing = to_amount(closing_match.group(1))
     expenses = df[df["kind"].isin(["purchase", "fee"])]
     return(df, opening, closing, expenses["amount"].sum())
