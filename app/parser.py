@@ -3,6 +3,9 @@ import re
 import pdfplumber
 import pandas as pd
 
+class StatementParseError(ValueError):
+    """The file is not a statement this parser understands."""
+
 def parse_statement(source:pathlib.Path):
     """
     Parse a statement from a pdf file.
@@ -44,6 +47,8 @@ def parse_statement(source:pathlib.Path):
 
     # dates have no year: take it from "PÉRIODE DE RELEVÉ : du 07 jan 2026 au 06 fév 2026"
     period = re.search(rf"du ({DATE}) (\d{{4}}) au ({DATE}) (\d{{4}})", full_text)
+    if not period or not rows:
+        raise StatementParseError("No statement transaction table found in this PDF")
     end_month, end_year = MONTHS[period.group(3).split()[1]], int(period.group(4))
 
     def to_date(s: str) -> pd.Timestamp:
