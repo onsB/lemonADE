@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LemonADE</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --bg: #fbfaf5; --card: #ffffff; --text: #24231e; --muted: #6f6d62;
+    --line: #e6e3d6; --accent: #f2cf3b; --good: #2f7a4b; --bad: #b3372f;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #1a1a17; --card: #24241f; --text: #f0eee4; --muted: #a5a294;
+      --line: #3a3932; --good: #6cc48d; --bad: #ef8a81;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 16px/1.5 system-ui, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 40px 16px; }
+  h1 { margin: 0; font-size: 28px; }
+  .tagline { margin: 0 0 24px; color: var(--muted); }
+  form, .tile, .table-wrap { background: var(--card); border: 1px solid var(--line); border-radius: 10px; }
+  form { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; padding: 16px; }
+  input[type=file] { flex: 1 1 240px; min-width: 0; }
+  button { padding: 9px 20px; border: 0; border-radius: 7px; background: var(--accent); color: #24231e; font: inherit; font-weight: 600; cursor: pointer; }
+  button:disabled { opacity: .55; cursor: wait; }
+  #status { min-height: 24px; margin: 14px 0; color: var(--muted); }
+  #status.error { color: var(--bad); }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 12px; }
+  .tile { padding: 14px 16px; }
+  .tile span { display: block; color: var(--muted); font-size: 13px; }
+  .tile strong { font-size: 22px; font-variant-numeric: tabular-nums; }
+  #check { margin: 14px 0; font-weight: 600; }
+  #check.good { color: var(--good); }
+  #check.bad { color: var(--bad); }
+  .table-tools { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; margin: 0 0 10px; }
+  .table-tools label { cursor: pointer; }
+  #showing { color: var(--muted); font-size: 14px; }
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; }
+  th, td { padding: 9px 14px; border-bottom: 1px solid var(--line); text-align: left; white-space: nowrap; }
+  tr:last-child td { border-bottom: 0; }
+  th { color: var(--muted); font-size: 13px; font-weight: 500; }
+  .amount { text-align: right; font-variant-numeric: tabular-nums; }
+  td.description { white-space: normal; min-width: 200px; }
+  [hidden] { display: none; }
+</style>
+</head>
+<body>
+<main>
+  <h1>🍋 LemonADE</h1>
+  <p class="tagline">Upload a statement to see your expenses.</p>
+
+  <form id="upload">
+    <input id="file" type="file" accept="application/pdf,.pdf" required aria-label="Statement PDF">
+    <button id="submit" type="submit">Read statement</button>
+  </form>
+  <p id="status" role="status"></p>
+
+  <section id="results" hidden>
+    <div class="tiles">
+      <div class="tile"><span>Spending</span><strong id="spending"></strong></div>
+      <div class="tile"><span>Transactions</span><strong id="count"></strong></div>
+      <div class="tile"><span>Previous balance</span><strong id="opening"></strong></div>
+      <div class="tile"><span>New balance</span><strong id="closing"></strong></div>
+    </div>
+    <p id="check"></p>
+    <div class="table-tools">
+      <label><input id="expenses-only" type="checkbox" checked> Expenses only</label>
+      <span id="showing"></span>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr><th>Date</th><th>Description</th><th>Type</th><th class="amount">Amount</th></tr>
+        </thead>
+        <tbody id="rows"></tbody>
+      </table>
+    </div>
+  </section>
+</main>
+
+<script>
+  const $ = (id) => document.getElementById(id);
+  const EXPENSE_KINDS = ["purchase", "fee"];  // the same kinds the Spending total counts
+  let allTransactions = [];
+  const money = (n) => n == null
+    ? "–"
+    : new Intl.NumberFormat("en-CA", { style: "currency", currency: "CAD" }).format(n);
+
+  function cell(text, className) {
+    const td = document.createElement("td");
+    td.textContent = text;  // textContent, so text from a PDF can't inject HTML
+    if (className) td.className = className;
+    return td;
+  }
+
+  function showResults({ summary, transactions }) {
+    $("spending").textContent = money(summary.total_spending);
+    $("count").textContent = summary.transaction_count;
+    $("opening").textContent = money(summary.opening_balance);
+    $("closing").textContent = money(summary.closing_balance);
+
+    $("check").textContent = summary.reconciled
+      ? "✓ These transactions add up to the statement's balances."
+      : "⚠ These transactions don't add up to the statement's balances. Check them before relying on this.";
+    $("check").className = summary.reconciled ? "good" : "bad";
+
+    allTransactions = transactions;
+    renderRows();
+    $("results").hidden = false;
+  }
+
+  function renderRows() {
+    const shown = $("expenses-only").checked
+      ? allTransactions.filter((t) => EXPENSE_KINDS.includes(t.kind))
+      : allTransactions;
+
+    $("rows").replaceChildren(...shown.map((t) => {
+      const tr = document.createElement("tr");
+      tr.append(cell(t.date), cell(t.description, "description"), cell(t.kind), cell(money(t.amount), "amount"));
+      return tr;
+    }));
+    $("showing").textContent = `Showing ${shown.length} of ${allTransactions.length}`;
+  }
+
+  $("expenses-only").addEventListener("change", renderRows);
+
+  function setStatus(message, isError = false) {
+    $("status").textContent = message;
+    $("status").className = isError ? "error" : "";
+  }
+
+  $("upload").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const body = new FormData();
+    body.append("file", $("file").files[0]);
+
+    $("submit").disabled = true;
+    $("results").hidden = true;
+    setStatus("Reading your statement. This can take up to a minute…");
+    try {
+      const response = await fetch("/statements/parse", { method: "POST", body });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.detail ?? "Something went wrong.");
+      setStatus("");
+      showResults(data);
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      $("submit").disabled = false;
+    }
+  });
+</script>
+</body>
+</html>
