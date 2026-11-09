@@ -1,16 +1,24 @@
 import io
 from typing import Literal
 from fastapi import FastAPI, UploadFile, HTTPException
-from fastapi.responses import Response
+from fastapi.responses import FileResponse, Response
+from openai import APIConnectionError
 from pdfplumber.utils.exceptions import PdfminerException
 from pydantic import BaseModel
 
 import datetime as dt
+from pathlib import Path
 
-from app.parser import parse_statement, StatementParseError
+from app.agent import run_agent
 
 MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 app = FastAPI(title = "LemonADE")
+
+
+@app.get("/", include_in_schema=False)
+def index():
+    return FileResponse(Path(__file__).parent / "static" / "index.html")
+
 
 class Transaction(BaseModel):
     date: dt.date
@@ -33,29 +41,28 @@ class ParsedStatement(BaseModel):
 
 
 @app.post("/statements/parse", response_model=ParsedStatement)
-async def parse_uploaded_statement(
+def parse_uploaded_statement(
     file: UploadFile,
     format: Literal["json", "csv"] = "json"
 ):
-    content = await file.read()
+    content = file.file.read()
     if len(content) > MAX_UPLOAD_BYTES:
         raise HTTPException(413, "File size exceeds the maximum limit (10 MB)")
     if not content.startswith(b"%PDF"):          # check the bytes, not the filename
         raise HTTPException(415, "Upload a PDF statement")
 
     try:
-        df, opening, closing, spending = parse_statement(io.BytesIO(content))
-    except (StatementParseError, PdfminerException) as e:
+        out = run_agent(io.BytesIO(content))
+    except PdfminerException as e:
         raise HTTPException(422, f"Could not read this statement: {e}")
+    except APIConnectionError:
+        raise HTTPException(503, "LLM server unreachable. Is LM Studio running?")
 
-    summary = Summary(
-        transaction_count=len(df),
-        total_spending=round(spending, 2),
-        opening_balance=opening,
-        closing_balance=closing,
-        reconciled=round(opening + df["amount"].sum(), 2) == closing,
-    )
+    if "df" not in out:
+        raise HTTPException(422, "Could not read this statement")
 
+    df = out["df"]
+    summary = Summary(**out)
 
     if format == "csv":
         name = (file.filename or "statement").rsplit(".", 1)[0]
