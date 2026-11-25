@@ -2,7 +2,7 @@ import pandas as pd
 from langchain.agents import create_agent
 from langchain.tools import tool
 
-from app.engine import LayoutMismatch, extract, reconciliation_gap
+from app.engine import best_fit
 from app.layout import LAYOUTS
 from app.llm import build_llm
 from app.parser import parse_statement, StatementParseError
@@ -18,20 +18,11 @@ def read_with_known_layouts(source) -> dict | None:
     """Read the statement with every known layout, without the LLM. The layout that
     reconciles wins; if none does, the closest one that fits at all (e.g. CIBC, whose
     payments we skip). None when no known layout fits this statement."""
-    rows = read_rows(source)
-    best = None
-    for layout in LAYOUTS:
-        try:
-            df, opening, closing = extract(rows, layout)
-        except LayoutMismatch:
-            continue  # another bank's statement
-        gap = reconciliation_gap(df, opening, closing, layout)
-        if best is None or abs(gap) < abs(best[0]):
-            best = (gap, layout, df, opening, closing)
-    if best is None:
+    fit = best_fit(read_rows(source), LAYOUTS)
+    if fit is None:
         return None
 
-    gap, layout, df, opening, closing = best
+    df, layout, gap = fit.df, fit.layout, fit.gap
     df = df.assign(
         date=pd.to_datetime(df["date"]),
         posted=pd.to_datetime(df["posted"]),
@@ -41,8 +32,8 @@ def read_with_known_layouts(source) -> dict | None:
     return {
         "transaction_count": len(df),
         "total_spending": round(df.loc[df["amount"] > 0, "amount"].sum(), 2),
-        "opening_balance": opening,
-        "closing_balance": closing,
+        "opening_balance": fit.opening,
+        "closing_balance": fit.closing,
         "reconciled": gap == 0,
         "layout": layout.name,
         "notes": f"Read with the {layout.name} layout" + ("" if gap == 0 else f", off by {gap:.2f} $"),

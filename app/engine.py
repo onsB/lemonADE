@@ -1,5 +1,6 @@
 import datetime as dt
 import re
+from dataclasses import dataclass
 from itertools import groupby
 
 import pandas as pd
@@ -318,6 +319,30 @@ def extract(rows: list[Row], layout: Layout) -> tuple[pd.DataFrame, float, float
         raise LayoutMismatch("No transactions found")
     df = pd.DataFrame(transactions)
     return df, balance(rows, layout.opening_balance, layout), balance(rows, layout.closing_balance, layout)
+
+
+@dataclass
+class Fit:
+    layout: Layout
+    df: pd.DataFrame
+    opening: float
+    closing: float
+    gap: float  # 0.0 when the transactions add up to the balances
+
+
+def best_fit(rows: list[Row], layouts: list[Layout]) -> Fit | None:
+    """Read the statement with each layout. One that reconciles wins; if none does, the
+    closest one that fits at all. None when no layout fits this statement."""
+    best = None
+    for layout in layouts:
+        try:
+            df, opening, closing = extract(rows, layout)
+        except LayoutMismatch:
+            continue  # another bank's statement
+        fit = Fit(layout, df, opening, closing, reconciliation_gap(df, opening, closing, layout))
+        if best is None or abs(fit.gap) < abs(best.gap):
+            best = fit
+    return best
 
 
 def reconciliation_gap(df: pd.DataFrame, opening: float, closing: float, layout: Layout) -> float:
