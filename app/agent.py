@@ -35,6 +35,7 @@ def read_with_known_layouts(source) -> dict | None:
         "opening_balance": fit.opening,
         "closing_balance": fit.closing,
         "reconciled": gap == 0,
+        "gap": gap,
         "layout": layout.name,
         "notes": f"Read with the {layout.name} layout" + ("" if gap == 0 else f", off by {gap:.2f} $"),
         "df": df,

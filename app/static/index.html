@@ -73,7 +73,7 @@
     <div class="table-wrap statements">
       <table>
         <thead>
-          <tr><th>Statement</th><th class="amount">Spending</th><th class="amount">Transactions</th><th class="amount">Previous balance</th><th class="amount">New balance</th><th>Adds up</th></tr>
+          <tr><th>Statement</th><th>Bank</th><th class="amount">Spending</th><th class="amount">Transactions</th><th class="amount">Previous balance</th><th class="amount">New balance</th><th>Adds up</th></tr>
         </thead>
         <tbody id="statement-rows"></tbody>
       </table>
@@ -113,19 +113,25 @@
     const tr = document.createElement("tr");
     if (s.error) {
       const reason = cell(s.error, "error");
-      reason.colSpan = 5;
+      reason.colSpan = 6;
       tr.append(cell(s.filename, "description"), reason);
       return tr;
     }
     tr.append(
       cell(s.filename, "description"),
+      cell(s.summary.layout ?? "–"),
       cell(money(s.summary.total_spending), "amount"),
       cell(s.summary.transaction_count, "amount"),
       cell(money(s.summary.opening_balance), "amount"),
       cell(money(s.summary.closing_balance), "amount"),
-      cell(s.summary.reconciled ? "✓ Yes" : "⚠ No"),
+      cell(addsUp(s.summary)),
     );
     return tr;
+  }
+
+  function addsUp(summary) {
+    if (summary.reconciled) return "✓ Yes";
+    return summary.gap == null ? "⚠ No" : `⚠ Off by ${money(Math.abs(summary.gap))}`;
   }
 
   function showResults() {
@@ -137,7 +143,9 @@
     $("statement-count").textContent = parsed.length;
 
     $("check").textContent = unbalanced
-      ? `⚠ ${unbalanced} of ${parsed.length} statements don't add up to their balances. Check them before relying on this.`
+      ? `⚠ ${unbalanced} of ${parsed.length} statements don't add up to their balances, so some of their ` +
+        `transactions may be missing (for example payments listed in a separate section). ` +
+        `Their spending can still be right, but check them before relying on it.`
       : parsed.length ? "✓ These transactions add up to the statements' balances." : "";
     $("check").className = unbalanced ? "bad" : "good";
     $("statement-rows").replaceChildren(...statements.map(statementRow));
@@ -183,18 +191,25 @@
     $("submit").disabled = true;
     $("results").hidden = true;
     statements = [];
-    for (const [i, file] of files.entries()) {
-      setStatus(`Reading statement ${i + 1} of ${files.length}: ${file.name}. Each one can take up to a minute…`);
-      statements.push(await readStatement(file));
+    let done = 0;
+    setStatus(`Reading ${files.length} statement${files.length > 1 ? "s" : ""}…`);
+
+    // All at once: known banks take about a second each. Statements from a bank we don't
+    // know yet go to the local model and take longer, but they no longer hold up the rest.
+    await Promise.all(files.map(async (file, i) => {
+      const result = await readStatement(file);
+      statements.push({ ...result, order: i });
+      statements.sort((a, b) => a.order - b.order);  // keep the order the files were picked in
+      done += 1;
+      if (done < files.length) setStatus(`Read ${done} of ${files.length} statements…`);
       showResults();  // show each statement as soon as it's ready
-    }
+    }));
 
     const failed = statements.filter((s) => s.error).length;
     setStatus(failed ? `Couldn't read ${failed} of ${files.length} statements.` : "", failed > 0);
     $("submit").disabled = false;
   });
 
-  // One at a time: the local model handles one request at a time anyway.
   async function readStatement(file) {
     const body = new FormData();
     body.append("file", file);

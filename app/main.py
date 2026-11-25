@@ -33,6 +33,8 @@ class Summary(BaseModel):
     opening_balance: float | None
     closing_balance: float | None
     reconciled: bool | None
+    gap: float | None = None  # how far the transactions are from the balances; 0 when they add up
+    layout: str | None = None  # which bank layout read the statement, e.g. "RBC chequing"
 
 class ParsedStatement(BaseModel):
     filename: str
