@@ -1,3 +1,5 @@
+import re
+
 import pandas as pd
 
 from app.layout import Layout
@@ -14,6 +16,20 @@ TABLE_MARGIN = 5.0
 TABLE_GAP = 40.0
 
 Span = tuple[float, float]
+
+# What kind of value each column holds. Any other column ("description", "category") is text.
+DATE_COLUMNS = {"date", "posted"}
+MONEY_COLUMNS = {"amount", "withdrawal", "deposit", "balance"}
+
+# Month names; statements print them whole or cut short ("mar", "DÉC", "sept").
+# Banks also write June and July as "JUN" and "JUL".
+MONTHS = {
+    "janvier": 1, "février": 2, "fevrier": 2, "mars": 3, "avril": 4, "mai": 5,
+    "juin": 6, "jun": 6, "juillet": 7, "jul": 7, "août": 8, "aout": 8, "septembre": 9,
+    "octobre": 10, "novembre": 11, "décembre": 12, "decembre": 12,
+}
+# One word of an amount: "-9", "999,99", "(12,34", "$", "$)". A thousands space splits amounts.
+MONEY = re.compile(r"[-(]?\d[\d,.]*\)?|\$\)?")
 
 
 def find_columns(page_rows: list[Row], layout: Layout) -> tuple[dict[str, Span], int] | None:
@@ -72,6 +88,47 @@ def table_rows(page_rows: list[Row], layout: Layout) -> tuple[dict[str, Span], l
             break
         table.append(row)
     return spans, table
+
+
+def split_cells(row: Row, spans: dict[str, Span]) -> dict[str, str]:
+    """{"date": "9 mar", "posted": "10 mar", "description": "IGA #9999 VERDUN", "amount": "99,99 $"}.
+    Every column in `spans` gets a key; empty string when the row has nothing there."""
+    cells: dict[str, list[Word]] = {name: [] for name in spans}
+    for word in row.words:
+        cells[_column_for(word, spans, cells)].append(word)
+    return {name: " ".join(w.text for w in words) for name, words in cells.items()}
+
+
+def _column_for(word: Word, spans: dict[str, Span], cells: dict[str, list[Word]]) -> str:
+    # Position alone isn't enough: e.g. RBC descriptions start under the posted-date header.
+    # So a word must also look like the kind of value the column holds.
+    for name in DATE_COLUMNS & spans.keys():
+        # At most a day and a month, so a word like "MARCHE" right after the date stays text.
+        if _looks_like_date(word.text) and _overlaps(word, spans[name]) and len(cells[name]) < 2:
+            return name
+    for name in MONEY_COLUMNS & spans.keys():
+        if MONEY.fullmatch(word.text) and _overlaps(word, spans[name]):
+            return name
+    if "category" in spans and word.x0 >= spans["category"][0] - TABLE_MARGIN:
+        return "category"
+    return "description"
+
+
+def month_number(text: str) -> int | None:
+    """1 for "jan", "JANV." or "janvier"; None for words like "MARCHE" that only start like a month."""
+    text = text.lower().rstrip(".")
+    if len(text) < 3:
+        return None
+    return next((number for name, number in MONTHS.items() if name.startswith(text)), None)
+
+
+def _looks_like_date(text: str) -> bool:
+    """A day number or a month name."""
+    return (text.isdigit() and len(text) <= 2) or month_number(text) is not None
+
+
+def _overlaps(word: Word, span: Span) -> bool:
+    return word.x0 <= span[1] + TABLE_MARGIN and word.x1 >= span[0] - TABLE_MARGIN
 
 
 def extract(rows: list[Row], layout: Layout) -> tuple[pd.DataFrame, float, float]:
