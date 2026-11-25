@@ -7,6 +7,11 @@ from app.rows import Row, Word
 HEADER_ROWS = 3
 # Words closer than this (in points) belong to the same header label, e.g. "MONTANT (EN $)".
 LABEL_GAP = 4.0
+# How far (in points) a value may stick out past its column header, e.g. "999,99 $" under "Dépôts ($)".
+TABLE_MARGIN = 5.0
+# A vertical gap this big (in points) ends the table, e.g. before a tear-off payment slip.
+# Rows inside a table are about 8 to 12 points apart.
+TABLE_GAP = 40.0
 
 Span = tuple[float, float]
 
@@ -43,6 +48,30 @@ def _label_span(words: list[Word]) -> Span:
             break
         end = word.x1
     return words[0].x0, end
+
+
+def table_rows(page_rows: list[Row], layout: Layout) -> tuple[dict[str, Span], list[Row]] | None:
+    """The column spans and the rows of this page's transaction table, cropped to the table.
+    None when the page has no transaction table."""
+    found = find_columns(page_rows, layout)
+    if found is None:
+        return None
+    spans, last_header_row = found
+
+    # Words right of the last column are a side panel, not part of the table.
+    edge = max(x1 for _, x1 in spans.values()) + TABLE_MARGIN
+    table = []
+    for row in page_rows[last_header_row + 1 :]:
+        words = [w for w in row.words if w.x0 <= edge]
+        if not words:
+            continue
+        row = Row(row.page, words)
+        if any(row.text.startswith(end) for end in layout.table_ends):
+            break
+        if table and row.words[0].top - table[-1].words[0].top > TABLE_GAP:
+            break
+        table.append(row)
+    return spans, table
 
 
 def extract(rows: list[Row], layout: Layout) -> tuple[pd.DataFrame, float, float]:
