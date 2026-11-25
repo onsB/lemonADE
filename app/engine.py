@@ -1,3 +1,4 @@
+import datetime as dt
 import re
 from itertools import groupby
 
@@ -216,6 +217,74 @@ def _add_text(transaction: dict, lines: list[dict], columns: list[str], before: 
         extra = [line[name] for line in lines if line[name]]
         parts = extra + [transaction[name]] if before else [transaction[name]] + extra
         transaction[name] = " ".join(p for p in parts if p)
+
+
+def statement_end(rows: list[Row], layout: Layout) -> dt.date:
+    """The last day of the statement period, which gives transactions their year.
+    The period row ends with it, e.g. "PÉRIODE DE RELEVÉ : du 07 mar 2026 au 06 avr 2026"."""
+    for text in _after_label(rows, [layout.period]):
+        words = text.split()
+        years = [i for i, w in enumerate(words) if re.fullmatch(r"\d{4}", w)]
+        if not years:
+            continue
+        year = years[-1]
+        # the month is the last month name before the year, the day the last number before that
+        month_at = next((i for i in range(year - 1, -1, -1) if month_number(words[i])), None)
+        if month_at is None:
+            continue
+        day = next((int(w) for w in reversed(words[:year]) if w.isdigit() and len(w) <= 2), 1)
+        return dt.date(int(words[year]), month_number(words[month_at]), day)
+    raise ValueError(f"Statement period not found (looked for {layout.period!r})")
+
+
+def parse_date(text: str, end: dt.date) -> dt.date | None:
+    """ "9 mar", "jan 17" or "28 DÉC" as a date, in the year that puts it at or before `end`."""
+    words = text.split()
+    day = next((int(w) for w in words if w.isdigit()), None)
+    month = next((month_number(w) for w in words if month_number(w)), None)
+    if day is None or month is None:
+        return None
+    # e.g. "28 déc" on a statement ending in January belongs to the previous year
+    year = end.year - 1 if month > end.month else end.year
+    return dt.date(year, month, day)
+
+
+def parse_amount(text: str, layout: Layout) -> float:
+    """ "-1 234,56 $", "(1 234,56 $)" or "1,234.56" as a number. 0.0 when there is none."""
+    negative = text.strip().startswith(("-", "(")) or text.strip().endswith("-")
+    digits = re.sub(r"[^\d.,]", "", text)  # drops spaces, "$", "-", "(" and ")"
+    if not digits:
+        return 0.0
+    thousands = "." if layout.decimal == "," else ","
+    value = float(digits.replace(thousands, "").replace(layout.decimal, "."))
+    return -value if negative else value
+
+
+def to_values(transaction: dict, layout: Layout, end: dt.date) -> dict:
+    """Turn one transaction's text into values. `amount` is positive when money goes out:
+    a card purchase, or a withdrawal from a bank account."""
+    if "amount" in transaction:
+        amount = parse_amount(transaction["amount"], layout)
+    else:
+        amount = parse_amount(transaction["withdrawal"], layout) - parse_amount(transaction["deposit"], layout)
+    values = {
+        "date": parse_date(transaction["date"], end),
+        "posted": parse_date(transaction.get("posted", ""), end),
+        "description": transaction["description"],
+        "amount": amount,
+        "page": transaction["page"],
+    }
+    if "category" in transaction:
+        values["category"] = transaction["category"]
+    return values
+
+
+def _after_label(rows: list[Row], labels: list[str]):
+    """The text after each label, for every row that contains one, top to bottom."""
+    for row in rows:
+        for label in labels:
+            if label in row.text:
+                yield row.text.split(label, 1)[1]
 
 
 def extract(rows: list[Row], layout: Layout) -> tuple[pd.DataFrame, float, float]:
