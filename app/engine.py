@@ -19,6 +19,11 @@ TABLE_GAP = 40.0
 
 Span = tuple[float, float]
 
+
+class LayoutMismatch(ValueError):
+    """The statement doesn't fit this layout, e.g. a label it names isn't there."""
+
+
 # What kind of value each column holds. Any other column ("description", "category") is text.
 DATE_COLUMNS = {"date", "posted"}
 MONEY_COLUMNS = {"amount", "withdrawal", "deposit", "balance"}
@@ -234,7 +239,7 @@ def statement_end(rows: list[Row], layout: Layout) -> dt.date:
             continue
         day = next((int(w) for w in reversed(words[:year]) if w.isdigit() and len(w) <= 2), 1)
         return dt.date(int(words[year]), month_number(words[month_at]), day)
-    raise ValueError(f"Statement period not found (looked for {layout.period!r})")
+    raise LayoutMismatch(f"Statement period not found (looked for {layout.period!r})")
 
 
 def parse_date(text: str, end: dt.date) -> dt.date | None:
@@ -287,6 +292,36 @@ def _after_label(rows: list[Row], labels: list[str]):
                 yield row.text.split(label, 1)[1]
 
 
+def balance(rows: list[Row], labels: list[str], layout: Layout) -> float:
+    """The first amount after any of `labels`, e.g. "NOUVEAU SOLDE 1 234,56 $" gives 1234.56.
+    Rows where the label has no amount after it (e.g. a column heading) are passed over."""
+    for text in _after_label(rows, labels):
+        if match := _amount_pattern(layout).search(text):
+            return parse_amount(match.group(), layout)
+    raise LayoutMismatch(f"Balance not found (looked for {labels})")
+
+
+def _amount_pattern(layout: Layout) -> re.Pattern:
+    """A whole amount in running text, e.g. "-1 234,56" or "(9,99". It can't start in the
+    middle of a number, so "août 2025 812,34" gives 812,34, not 25 812,34."""
+    decimal = re.escape(layout.decimal)
+    thousands = r"[  .]" if layout.decimal == "," else r"[  ,]"
+    return re.compile(rf"(?<![\d.,])[-(]?\d{{1,3}}(?:{thousands}\d{{3}})*{decimal}\d{{2}}(?!\d)")
+
+
 def extract(rows: list[Row], layout: Layout) -> tuple[pd.DataFrame, float, float]:
-    """Transactions (date, posted, description, amount, page), opening balance, closing balance."""
-    pass
+    """Transactions (date, posted, description, amount, page), opening balance, closing balance.
+    `amount` is positive when money goes out. Raises LayoutMismatch when the layout doesn't fit."""
+    end = statement_end(rows, layout)
+    transactions = [to_values(t, layout, end) for t in read_transactions(rows, layout)]
+    if not transactions:
+        raise LayoutMismatch("No transactions found")
+    df = pd.DataFrame(transactions)
+    return df, balance(rows, layout.opening_balance, layout), balance(rows, layout.closing_balance, layout)
+
+
+def reconciliation_gap(df: pd.DataFrame, opening: float, closing: float, layout: Layout) -> float:
+    """How far the transactions are from explaining the balances; 0.0 when they add up.
+    A card balance grows with spending, a bank balance shrinks with it."""
+    sign = 1 if layout.account == "credit_card" else -1
+    return round(opening + sign * df["amount"].sum() - closing, 2)
